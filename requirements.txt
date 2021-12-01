@@ -1,4 +1,3 @@
 aiohttp-socks<1.0.0
 aiohttp[speedups]<4.0.0
 maxminddb<3.0.0
-rich<11.0.0

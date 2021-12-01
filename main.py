@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 import asyncio
+import logging
 from ipaddress import IPv4Address
 from os import mkdir
 from random import shuffle
@@ -11,15 +12,6 @@ from aiohttp import ClientSession
 from aiohttp_socks import ProxyConnector
 from maxminddb import open_database
 from maxminddb.reader import Reader
-from rich.console import Console
-from rich.progress import (
-    BarColumn,
-    Progress,
-    TaskID,
-    TextColumn,
-    TimeRemainingColumn,
-)
-from rich.table import Table
 
 import config
 
@@ -35,7 +27,6 @@ class ProxyScraperChecker:
         http_sources: Optional[Iterable[str]] = None,
         socks4_sources: Optional[Iterable[str]] = None,
         socks5_sources: Optional[Iterable[str]] = None,
-        console: Optional[Console] = None,
     ) -> None:
         """Scrape and check proxies from sources and save them to files.
 
@@ -66,7 +57,6 @@ class ProxyScraperChecker:
             proto: {} for proto in self.SOURCES
         }
         self.proxies_count = {proto: 0 for proto in self.SOURCES}
-        self.c = console or Console()
 
     @staticmethod
     def append_to_file(file_path: str, content: str) -> None:
@@ -105,12 +95,7 @@ class ProxyScraperChecker:
         return f"::{country}::{region}::{city}"
 
     async def fetch_source(
-        self,
-        session: ClientSession,
-        source: str,
-        proto: str,
-        progress: Progress,
-        task: TaskID,
+        self, session: ClientSession, source: str, proto: str
     ) -> None:
         """Get proxies from source.
 
@@ -123,7 +108,7 @@ class ProxyScraperChecker:
                 status = r.status
                 text = await r.text(encoding="utf-8")
         except Exception as e:
-            self.c.print(f"{source}: {e}")
+            logging.error(f"{source}: {e}")
         else:
             if status == 200:
                 for proxy in text.splitlines():
@@ -138,12 +123,9 @@ class ProxyScraperChecker:
                         continue
                     self.proxies[proto][proxy] = None
             else:
-                self.c.print(f"{source} status code: {status}")
-        progress.update(task, advance=1)
+                logging.error(f"{source} status code: {status}")
 
-    async def check_proxy(
-        self, proxy: str, proto: str, progress: Progress, task: TaskID
-    ) -> None:
+    async def check_proxy(self, proxy: str, proto: str) -> None:
         """Check proxy validity.
 
         Args:
@@ -165,55 +147,35 @@ class ProxyScraperChecker:
 
             # Too many open files
             if isinstance(e, OSError) and e.errno == 24:
-                self.c.print(
-                    "[red]Please, set MAX_CONNECTIONS to lower value.[/red]"
-                )
+                logging.error("Please, set MAX_CONNECTIONS to lower value.")
 
             self.proxies[proto].pop(proxy)
         else:
             self.proxies[proto][proxy] = exit_node
-        progress.update(task, advance=1)
 
     async def fetch_all_sources(self) -> None:
         """Get proxies from sources."""
-        with self._get_progress() as progress:
-            tasks = {
-                proto: progress.add_task(
-                    "[yellow]Scraper[/yellow] [red]::[/red]"
-                    + f" [green]{proto.upper()}[/green]",
-                    total=len(sources),
-                )
+        logging.info("Fetching sources")
+        async with ClientSession() as session:
+            coroutines = (
+                self.fetch_source(session, source, proto)
                 for proto, sources in self.SOURCES.items()
-            }
-            async with ClientSession() as session:
-                coroutines = (
-                    self.fetch_source(
-                        session, source, proto, progress, tasks[proto]
-                    )
-                    for proto, sources in self.SOURCES.items()
-                    for source in sources
-                )
-                await asyncio.gather(*coroutines)
+                for source in sources
+            )
+            await asyncio.gather(*coroutines)
         for proto, proxies in self.proxies.items():
             self.proxies_count[proto] = len(proxies)
 
     async def check_all_proxies(self) -> None:
-        with self._get_progress() as progress:
-            tasks = {
-                proto: progress.add_task(
-                    "[yellow]Checker[/yellow] [red]::[/red]"
-                    + f" [green]{proto.upper()}[/green]",
-                    total=len(proxies),
-                )
-                for proto, proxies in self.proxies.items()
-            }
-            coroutines = [
-                self.check_proxy(proxy, proto, progress, tasks[proto])
-                for proto, proxies in self.proxies.items()
-                for proxy in proxies
-            ]
-            shuffle(coroutines)
-            await asyncio.gather(*coroutines)
+        for proto, proxies in self.proxies.items():
+            logging.info(f"Checking {len(proxies)} {proto} proxies")
+        coroutines = [
+            self.check_proxy(proxy, proto)
+            for proto, proxies in self.proxies.items()
+            for proxy in proxies
+        ]
+        shuffle(coroutines)
+        await asyncio.gather(*coroutines)
 
     def sort_proxies(self) -> None:
         self.proxies = {
@@ -267,44 +229,30 @@ class ProxyScraperChecker:
         await self.fetch_all_sources()
         await self.check_all_proxies()
 
-        table = Table()
-        table.add_column("Protocol", style="cyan")
-        table.add_column("Working", style="magenta")
-        table.add_column("Total", style="green")
+        logging.info("Result:")
         for proto, proxies in self.proxies.items():
-            working = len(proxies)
-            total = self.proxies_count[proto]
-            percentage = working / total * 100
-            table.add_row(
-                proto.upper(), f"{working} ({percentage:.1f}%)", str(total)
-            )
-        self.c.print(table)
+            logging.info(f"{proto} - {len(proxies)}")
 
         self.sort_proxies()
         self.save_proxies()
 
-        self.c.print(
-            "[green]Proxy folders have been created in the current directory."
-            + "\nThank you for using proxy-scraper-checker :)[/green]"
+        logging.info(
+            "Proxy folders have been created in the current directory."
         )
+        logging.info("Thank you for using proxy-scraper-checker :)")
 
     @staticmethod
     def _get_sorting_key(x: Tuple[str, Any]) -> Tuple[int, ...]:
         octets = x[0].replace(":", ".").split(".")
         return tuple(map(int, octets))
 
-    def _get_progress(self) -> Progress:
-        return Progress(
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            TextColumn("[progress.percentage]{task.percentage:3.0f}%"),
-            TextColumn("[blue][{task.completed}/{task.total}][/blue]"),
-            TimeRemainingColumn(),
-            console=self.c,
-        )
-
 
 async def main() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s | %(levelname)s | %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
     await ProxyScraperChecker(
         max_connections=config.MAX_CONNECTIONS,
         timeout=config.TIMEOUT,

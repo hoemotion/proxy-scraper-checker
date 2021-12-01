@@ -1,9 +1,9 @@
-<h1 align="center">proxy-scraper-checker</h1>
+<h1 align="center">proxy-scraper-checker [simple-output]</h1>
 <p align="center"><img src="screenshot.png" alt="Screenshot" /></p>
 
 Check free anonymous HTTP, SOCKS4, SOCKS5 proxies from different sources. Supports determining exit-node's geolocation for each proxy.
 
-**For a version that uses Python's built-in `logging` instead of [rich](https://github.com/willmcgugan/rich), see the [simple-output](https://github.com/monosans/proxy-scraper-checker/tree/simple-output) branch.**
+**For a version with fancy output powered by [rich](https://github.com/willmcgugan/rich), see the [main](https://github.com/monosans/proxy-scraper-checker) branch.**
 
 ## Usage
 
